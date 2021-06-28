@@ -37,6 +37,15 @@ Extensive documentation is available [here](http://community.optimism.io/docs/).
 * [`ops`](./ops): Contains Dockerfiles for containerizing each service involved in the protocol,
 as well as a docker-compose file for bringing up local testnets easily
 
+## Contributing
+
+Read through [CONTRIBUTING.md](./CONTRIBUTING.md) for a general overview of our contribution process.
+
+### Good First Issues
+You can find good first issues by filtering for the ["good first issue" tag on our issues page](https://github.com/ethereum-optimism/optimism/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) or alternatively by taking a look at our [Good First Issues project board](https://github.com/orgs/ethereum-optimism/projects/23).
+If you'd like to tackle one of these issues, please leave a comment and [assign yourself to the issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/assigning-issues-and-pull-requests-to-other-github-users#assigning-an-individual-issue-or-pull-request).
+This helps prevent two people accidentally working on the same task at the same time.
+
 ## Development Quick Start
 
 ### Dependencies
@@ -208,6 +217,10 @@ If you're making a backwards compatible change, please direct your pull request 
 Some exceptions to this rule exist for cases in which we absolutely must deploy some new contract after a release candidate branch has already been fully deployed.
 If you're changing or adding a contract and you're unsure about which branch to make a PR into, default to using the latest release candidate branch.
 See below for info about release candidate branches.
+
+### Release new versions
+
+Developers can release new versions of the software by adding changesets to their pull requests using `yarn changeset`. Changesets will persist over time on the `develop` branch without triggering new version bumps to be proposed by the Changesets bot. Once changesets are merged into `master`, the bot will create a new pull request called "Version Packages" which bumps the versions of packages. The correct flow for triggering releases is to re-base these pull requests onto `develop` and merge them, and then create a new pull request to merge `develop` onto `master`. Then, the `release` workflow will trigger the actual publishing to `npm` and Docker hub.
 
 ### Release candidate branches
 
