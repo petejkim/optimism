@@ -1,114 +1,165 @@
 package rollup
 
 import (
-	"fmt"
 	"testing"
 )
 
 type MockEpoch struct {
-	numBlocks uint64
+	numBlocks   uint64
+	repeatCount uint64
+	postHook    func(prevGasPrice float64, gasPriceUpdater *GasPriceUpdater)
 }
 
-// WIP
-func TestUsageOfGasPriceUpdater(t *testing.T) {
+func TestGetAverageGasPerSecond(t *testing.T) {
+	// Let's sanity check this function with some simple inputs.
+	// A 10 block epoch
+	epochStartBlockNumber := 10
+	latestBlockNumber := 20
+	// That lasts 10 seconds (1 block per second)
+	epochLengthSeconds := 10
+	// And each block has a gas limit of 1
+	averageBlockGasLimit := 1
+	// We expect a gas per second to be 1!
+	expectedGps := 1.0
+	gps := GetAverageGasPerSecond(uint64(epochStartBlockNumber), uint64(latestBlockNumber), uint64(epochLengthSeconds), uint64(averageBlockGasLimit))
+	if gps != expectedGps {
+		t.Fatalf("Gas per second not calculated correctly. Got: %v expected: %v", gps, expectedGps)
+	}
+}
+
+// Return a gas pricer that targets 3 blocks per epoch & 10% max change per epoch.
+func makeTestGasPricerAndUpdater(curPrice float64) (*GasPricer, *GasPriceUpdater, func(uint64), error) {
 	gpsTarget := 3300000.0
 	getGasTarget := func() float64 { return gpsTarget }
 	epochLengthSeconds := 10.0
 	averageBlockGasLimit := 11000000.0
-	// Based on our 10 second epoch, we are targetting this number of blocks per second
-	numBlocksToTarget := (epochLengthSeconds * gpsTarget) / averageBlockGasLimit
-	fmt.Println("Number of target blocks: ", numBlocksToTarget)
-
-	gasPricer, err := NewGasPricer(1, 1, getGasTarget, 10)
+	// Based on our 10 second epoch, we are targetting 3 blocks per epoch.
+	gasPricer, err := NewGasPricer(curPrice, 1, getGasTarget, 10)
 	if err != nil {
-		t.Fatal(err)
+		return nil, nil, nil, err
 	}
 
 	curBlock := uint64(10)
+	incrementCurrentBlock := func(newBlockNum uint64) { curBlock += newBlockNum }
 	getLatestBlockNumber := func() (uint64, error) { return curBlock, nil }
 	updateL2GasPrice := func(x float64) error {
-		fmt.Println("new gas price:", x)
 		return nil
 	}
 
-	// Example loop usage
 	startBlock, _ := getLatestBlockNumber()
-	gasUpdater, err := NewGasPriceUpdater(gasPricer, startBlock, 11000000, 10, getLatestBlockNumber, updateL2GasPrice)
+	gasUpdater, err := NewGasPriceUpdater(gasPricer, startBlock, uint64(averageBlockGasLimit), uint64(epochLengthSeconds), getLatestBlockNumber, updateL2GasPrice)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return gasPricer, gasUpdater, incrementCurrentBlock, nil
+}
+
+func TestUpdateGasPriceCallsUpdateL2GasPriceFn(t *testing.T) {
+	_, gasUpdater, incrementCurrentBlock, err := makeTestGasPricerAndUpdater(1)
 	if err != nil {
 		t.Fatal(err)
 	}
+	wasCalled := false
+	gasUpdater.updateL2GasPriceFn = func(gasPrice float64) error {
+		wasCalled = true
+		return nil
+	}
+	incrementCurrentBlock(3)
+	gasUpdater.UpdateGasPrice()
+	if wasCalled != true {
+		t.Fatalf("Expected updateL2GasPrice to be called.")
+	}
+}
 
+func TestUpdateGasPriceCorrectlyUpdatesAZeroBlockEpoch(t *testing.T) {
+	gasPricer, gasUpdater, _, err := makeTestGasPricerAndUpdater(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gasPriceBefore := gasPricer.curPrice
+	gasPriceAfter := gasPricer.curPrice
+	gasUpdater.updateL2GasPriceFn = func(gasPrice float64) error {
+		gasPriceAfter = gasPrice
+		return nil
+	}
+	gasUpdater.UpdateGasPrice()
+	if gasPriceBefore < gasPriceAfter {
+		t.Fatalf("Expected gasPrice to go down because we had fewer than 3 blocks in the epoch.")
+	}
+}
+
+func TestUpdateGasPriceFailsIfBlockNumberGoesBackwards(t *testing.T) {
+	_, gasUpdater, _, err := makeTestGasPricerAndUpdater(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gasUpdater.epochStartBlockNumber = 10
+	gasUpdater.getLatestBlockNumberFn = func() (uint64, error) { return 0, nil }
+	err = gasUpdater.UpdateGasPrice()
+	if err == nil {
+		t.Fatalf("Expected UpdateGasPrice to fail when block number goes backwards.")
+	}
+}
+
+func TestUsageOfGasPriceUpdater(t *testing.T) {
+	_, gasUpdater, incrementCurrentBlock, err := makeTestGasPricerAndUpdater(1000)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// In these mock epochs the gas price shold go up and then down again after the time has passed
 	mockEpochs := []MockEpoch{
 		// First jack up the price to show that it will grow over time
 		MockEpoch{
-			numBlocks: 10,
-		},
-		MockEpoch{
-			numBlocks: 10,
-		},
-		MockEpoch{
-			numBlocks: 10,
+			numBlocks:   10,
+			repeatCount: 3,
+			// Make sure the gas price is increasing
+			postHook: func(prevGasPrice float64, gasPriceUpdater *GasPriceUpdater) {
+				curPrice := gasPriceUpdater.gasPricer.curPrice
+				if prevGasPrice >= curPrice {
+					t.Fatalf("Expected gas price to increase.")
+				}
+			},
 		},
 		// Then stabilize around the GPS we want
 		MockEpoch{
-			numBlocks: 3,
+			numBlocks:   3,
+			repeatCount: 5,
+			postHook:    func(prevGasPrice float64, gasPriceUpdater *GasPriceUpdater) {},
 		},
 		MockEpoch{
-			numBlocks: 3,
-		},
-		MockEpoch{
-			numBlocks: 3,
-		},
-		MockEpoch{
-			numBlocks: 3,
-		},
-		MockEpoch{
-			numBlocks: 3,
-		},
-		MockEpoch{
-			numBlocks: 3,
-		},
-		MockEpoch{
-			numBlocks: 3,
-		},
-		MockEpoch{
-			numBlocks: 3,
-		},
-		MockEpoch{
-			numBlocks: 3,
+			numBlocks:   3,
+			repeatCount: 0,
+			postHook: func(prevGasPrice float64, gasPriceUpdater *GasPriceUpdater) {
+				curPrice := gasPriceUpdater.gasPricer.curPrice
+				if prevGasPrice != curPrice {
+					t.Fatalf("Expected gas price to stablize.")
+				}
+			},
 		},
 		// Then reduce the demand to show the fee goes back down to the floor
 		MockEpoch{
-			numBlocks: 1,
-		},
-		MockEpoch{
-			numBlocks: 1,
-		},
-		MockEpoch{
-			numBlocks: 1,
-		},
-		MockEpoch{
-			numBlocks: 1,
-		},
-		MockEpoch{
-			numBlocks: 1,
-		},
-		MockEpoch{
-			numBlocks: 1,
-		},
-		MockEpoch{
-			numBlocks: 1,
+			numBlocks:   1,
+			repeatCount: 5,
+			postHook: func(prevGasPrice float64, gasPriceUpdater *GasPriceUpdater) {
+				curPrice := gasPriceUpdater.gasPricer.curPrice
+				if prevGasPrice <= curPrice && curPrice != gasPriceUpdater.gasPricer.floorPrice {
+					t.Fatalf("Expected gas price either reduce or be at the floor.")
+				}
+			},
 		},
 	}
 	loop := func(epoch MockEpoch) {
-		curBlock += epoch.numBlocks
+		prevGasPrice := gasUpdater.gasPricer.curPrice
+		incrementCurrentBlock(epoch.numBlocks)
 		err = gasUpdater.UpdateGasPrice()
 		if err != nil {
 			t.Fatal(err)
 		}
+		epoch.postHook(prevGasPrice, gasUpdater)
 	}
 	for _, epoch := range mockEpochs {
-		loop(epoch)
+		for i := 0; i < int(epoch.repeatCount)+1; i++ {
+			loop(epoch)
+		}
 	}
 }

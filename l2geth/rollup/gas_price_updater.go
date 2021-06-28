@@ -8,7 +8,7 @@ type GetLatestBlockNumberFn func() (uint64, error)
 type UpdateL2GasPriceFn func(float64) error
 
 type GasPriceUpdater struct {
-	gasPricer              L2GasPricer
+	gasPricer              GasPricer
 	epochStartBlockNumber  uint64
 	averageBlockGasLimit   uint64
 	epochLengthSeconds     uint64
@@ -16,8 +16,17 @@ type GasPriceUpdater struct {
 	updateL2GasPriceFn     UpdateL2GasPriceFn
 }
 
+func GetAverageGasPerSecond(
+	epochStartBlockNumber uint64,
+	latestBlockNumber uint64,
+	epochLengthSeconds uint64,
+	averageBlockGasLimit uint64,
+) float64 {
+	return float64((latestBlockNumber - epochStartBlockNumber) * averageBlockGasLimit / epochLengthSeconds)
+}
+
 func NewGasPriceUpdater(
-	gasPricer *L2GasPricer,
+	gasPricer *GasPricer,
 	epochStartBlockNumber uint64,
 	averageBlockGasLimit uint64,
 	epochLengthSeconds uint64,
@@ -51,7 +60,12 @@ func (g *GasPriceUpdater) UpdateGasPrice() error {
 	if latestBlockNumber < g.epochStartBlockNumber {
 		return errors.New("Latest block number less than the last epoch's block number.")
 	}
-	averageGasPerSecond := float64((latestBlockNumber - g.epochStartBlockNumber) * g.averageBlockGasLimit / g.epochLengthSeconds)
+	averageGasPerSecond := GetAverageGasPerSecond(
+		g.epochStartBlockNumber,
+		latestBlockNumber,
+		g.epochLengthSeconds,
+		g.averageBlockGasLimit,
+	)
 	_, err = g.gasPricer.CompleteEpoch(averageGasPerSecond)
 	if err != nil {
 		return err
